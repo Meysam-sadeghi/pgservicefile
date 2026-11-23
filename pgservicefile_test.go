@@ -2,6 +2,9 @@ package pgservicefile_test
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Meysam-sadeghi/pgservicefile"
@@ -67,4 +70,38 @@ func TestParseServicefileWithMissedServiceSection(t *testing.T) {
 	servicefile, err := pgservicefile.ParseServicefile(buf)
 	assert.Error(t, err)
 	assert.Nil(t, servicefile)
+}
+
+func TestSecurityHardening(t *testing.T) {
+	var nilSF *pgservicefile.Servicefile
+	_, err := nilSF.GetService("abc")
+	require.Error(t, err)
+
+	_, err = pgservicefile.ParseServicefile(nil)
+	require.Error(t, err)
+
+	for _, invalid := range []string{
+		"[]\nhost=h\n",
+		"[svc]\n=val\n",
+		"[svc]\nhost=a\x00b\n",
+	} {
+		_, err := pgservicefile.ParseServicefile(strings.NewReader(invalid))
+		require.Error(t, err)
+	}
+
+	oversized := strings.NewReader("[svc]\nhost=" + strings.Repeat("a", (4<<20)+16))
+	_, err = pgservicefile.ParseServicefile(oversized)
+	require.Error(t, err)
+
+	dir := t.TempDir()
+	_, err = pgservicefile.ReadServicefile(dir)
+	require.Error(t, err)
+
+	validPath := filepath.Join(dir, "pg_service.conf")
+	require.NoError(t, os.WriteFile(validPath, []byte("[prod]\nhost=127.0.0.1\nport=5432\n"), 0o600))
+	sf, err := pgservicefile.ReadServicefile(validPath)
+	require.NoError(t, err)
+	svc, err := sf.GetService("prod")
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", svc.Settings["host"])
 }
